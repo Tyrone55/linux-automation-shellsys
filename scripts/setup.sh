@@ -8,12 +8,8 @@ sudo chmod +x /opt/shellsys/*.sh
 echo "[+] Installed. Try: sudo /opt/shellsys/main.sh --auto"
 
 # ===============================================
-# ShellSys 系统安装与定时任务配置脚本
-# 功能：
-#   1. 初始化目录结构与权限
-#   2. 自动部署主控及各模块
-#   3. 自动配置 crond 定时任务（每2分钟执行一次）
-#   4. 汇总日志到 main_YYYY-MM-DD.log
+# ShellSys 系统安装与自动任务配置脚本
+# （含系统时间自动同步 + 定时任务自动安装）
 # ===============================================
 
 set -Eeuo pipefail
@@ -45,14 +41,40 @@ else
 echo "[*] config.ini already exists. Skipped."
 fi
 
-# === 三、检测并安装 crond 服务 ===
+# === 三、检测并同步系统时间（NTP） ===
+echo "[INFO] 检查系统时间同步状态..."
+if ! rpm -q chrony >/dev/null 2>&1; then
+  echo "[INFO] Installing chrony ..."
+  dnf install -y chrony
+fi
+
+systemctl enable --now chronyd
+
+# 启用 NTP 自动同步
+timedatectl set-ntp true
+
+# 等待同步完成
+sleep 2
+
+if timedatectl status | grep -q "System clock synchronized: yes"; then
+  echo "[OK] 系统时间已同步。"
+else
+  echo "[WARN] 系统时间尚未同步，尝试强制校时..."
+  chronyc makestep || true
+fi
+
+# 打印当前时间
+timedatectl status | grep -E "Time zone|Local time|System clock"
+
+# === 四、安装并启动 crond 服务 ===
+echo "[INFO] 检查 crond 服务..."
 if ! rpm -q cronie >/dev/null 2>&1; then
   echo "[INFO] Installing cronie ..."
   dnf install -y cronie cronie-anacron
 fi
 systemctl enable --now crond
 
-# === 四、配置 /etc/cron.d 计划任务 ===
+# === 五、配置 /etc/cron.d 定时任务 ===
 CRON_FILE="/etc/cron.d/shellsys"
 LOG_DIR="/var/log/shellsys"
 
@@ -60,7 +82,7 @@ cat > "$CRON_FILE" <<'EOF'
 SHELL=/bin/bash
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LOGNAME=root
-*/2 * * * * root /opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +\%F).log 2>&1 && echo "[Cron executed at $(date '+\%F %T')]" >> /var/log/shellsys/cron.log
+*/2 * * * * root bash -lc '/opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +%F).log 2>&1 && echo "[Cron executed at $(date "+%F %T")]" >> /var/log/shellsys/cron.log'
 EOF
 
 chmod 644 "$CRON_FILE"
@@ -70,7 +92,7 @@ systemctl reload crond
 echo "[OK] Cron job installed: /etc/cron.d/shellsys"
 echo "[INFO] 任务每2分钟触发一次，日志位于 /var/log/shellsys/"
 
-# === 五、首次手动触发验证 ===
+# === 六、首次手动触发验证 ===
 bash -lc '/opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +%F).log 2>&1 && echo "[Cron executed at $(date "+%F %T")]" >> /var/log/shellsys/cron.log'
 
 echo "[+] Installed. Try: sudo /opt/shellsys/main.sh --auto"
@@ -79,6 +101,3 @@ echo "[+] 查看日志: tail -f /var/log/shellsys/main_$(date +%F).log"
 echo "[+] 或查看触发记录: tail -f /var/log/shellsys/cron.log"
 echo
 echo "[DONE] ShellSys installation completed successfully."
-
-
-
