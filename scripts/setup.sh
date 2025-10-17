@@ -82,7 +82,7 @@ cat > "$CRON_FILE" <<'EOF'
 SHELL=/bin/bash
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LOGNAME=root
-*/2 * * * * root bash -lc '/opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +%F).log 2>&1 && echo "[Cron executed at $(date "+%F %T")]" >> /var/log/shellsys/cron.log'
+*/2 * * * * root bash -lc '/opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +\%F).log 2>&1 && echo "[Cron executed at $(date +\%F\ %T)]" >> /var/log/shellsys/cron.log'
 EOF
 
 chmod 644 "$CRON_FILE"
