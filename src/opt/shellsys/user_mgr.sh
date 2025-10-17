@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# ===============================================
+# Module: user_mgr.sh
+# Usage: ./user_mgr.sh [--config=config.ini] [--verbose]
+# Description: 用户管理模块，负责创建与验证系统用户
+# ===============================================
+
 set -Eeuo pipefail
 trap 'echo "[FATAL] user_mgr.sh failed at line $LINENO" >&2; exit 4' ERR
 CONF="/opt/shellsys/config.ini"
@@ -6,7 +12,7 @@ CONF="/opt/shellsys/config.ini"
 MODULE="user_mgr"; TODAY="$(date +%F)"
 LOG_FILE="${LOG_DIR:-/var/log/shellsys}/${MODULE}_${TODAY}.log"
 mkdir -p "${LOG_DIR:-/var/log/shellsys}"
-log_event(){ printf '%s [%s] %s\n' "$(date '+%F %T')" "$MODULE" "$*" | tee -a "$LOG_FILE"; }
+log_event(){ printf '%s [%s] %s\n' "$(date '+%F %T')" "$MODULE" "$EXEC_ID" "$*" | tee -a "$LOG_FILE"; }
 [[ "$(id -u)" -eq 0 ]] || { echo "Permission denied. Run as root."; exit 2; }
 [[ -n "${USER_LIST:-}" && -f "$USER_LIST" ]] || { log_event "USER_LIST not found: ${USER_LIST:-unset}"; exit 1; }
 add_user(){ local user="$1" group="$2" pass="$3"; if id "$user" &>/dev/null; then log_event "User $user already exists."; else getent group "$group" >/dev/null || groupadd "$group"; useradd -m -g "$group" "$user"; [[ -n "$pass" ]] && echo "$user:$pass" | chpasswd; log_event "User $user created."; fi; }
