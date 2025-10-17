@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
-# ===============================================
-# Module: user_mgr.sh
-# Usage: ./user_mgr.sh [--config=config.ini] [--verbose]
-# Description: 用户管理模块，负责创建与验证系统用户
-# ===============================================
-
+# user_mgr.sh — 批量用户管理
 set -Eeuo pipefail
 trap 'echo "[FATAL] user_mgr.sh failed at line $LINENO" >&2; exit 4' ERR
+
 CONF="/opt/shellsys/config.ini"
 [[ -f "$CONF" ]] && source "$CONF" || { echo "[ERR] config.ini missing: $CONF"; exit 1; }
+
 MODULE="user_mgr"; TODAY="$(date +%F)"
-LOG_FILE="${LOG_DIR:-/var/log/shellsys}/${MODULE}_${TODAY}.log"
-mkdir -p "${LOG_DIR:-/var/log/shellsys}"
-log_event(){ printf '%s [%s] %s\n' "$(date '+%F %T')" "$MODULE" "$EXEC_ID" "$*" | tee -a "$LOG_FILE"; }
-[[ "$(id -u)" -eq 0 ]] || { echo "Permission denied. Run as root."; exit 2; }
-[[ -n "${USER_LIST:-}" && -f "$USER_LIST" ]] || { log_event "USER_LIST not found: ${USER_LIST:-unset}"; exit 1; }
-add_user(){ local user="$1" group="$2" pass="$3"; if id "$user" &>/dev/null; then log_event "User $user already exists."; else getent group "$group" >/dev/null || groupadd "$group"; useradd -m -g "$group" "$user"; [[ -n "$pass" ]] && echo "$user:$pass" | chpasswd; log_event "User $user created."; fi; }
-while IFS=':' read -r user group pass; do [[ -z "$user" ]] && continue; add_user "$user" "$group" "$pass"; done < "$USER_LIST"
-exit 0
+LOG_DIR="${LOG_DIR:-/var/log/shellsys}"; mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/${MODULE}_${TODAY}.log"
+log(){ printf '%s [%s] %s %s\n' "$(date '+%F %T')" "$MODULE" "${EXEC_ID:-NA}" "$*" | tee -a "$LOG_FILE"; }
+
+[[ "$(id -u)" -eq 0 ]] || { echo "[user_mgr] Permission denied. Run as root." >&2; exit 2; }
+
+ULIST="${USER_LIST:-/etc/shellsys/user_list.txt}"
+[[ -f "$ULIST" ]] || { log "User list not found: $ULIST"; exit 0; }
+
+while IFS=: read -r u g p; do
+  [[ -z "$u" ]] && continue
+  if id "$u" &>/dev/null; then
+    log "User $u already exists."
+  else
+    groupadd -f "$g" || true
+    useradd -m -g "$g" "$u" && echo "$u:$p" | chpasswd && log "User $u created."
+  fi
+done < "$ULIST"

@@ -1,6 +1,1 @@
-ls
-cat
-tail
-awk
-grep
-echo
+root

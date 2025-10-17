@@ -1,73 +1,55 @@
 #!/usr/bin/env bash
-# ===============================================
-# Module: user_mgr.sh
-# Usage: ./user_mgr.sh [--config=config.ini] [--verbose]
-# Description: 用户管理模块，负责创建与验证系统用户
-# ===============================================
-
+# backup_restore.sh — 文件与数据库备份/恢复
 set -Eeuo pipefail
 trap 'echo "[FATAL] backup_restore.sh failed at line $LINENO" >&2; exit 4' ERR
 
-# 默认配置路径，可被 --config 覆盖
 CONF="/opt/shellsys/config.ini"
-ACTION="--backup"
-RESTORE_DATE=""
-
-# 解析无序参数：先吃掉 --config，再识别 --backup / --restore
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --config=*)
-      CONF="${1#*=}"; shift ;;
-    --config)
-      [[ $# -ge 2 ]] || { echo "[ERR] --config needs a value"; exit 1; }
-      CONF="$2"; shift 2 ;;
-    --backup|--restore)
-      ACTION="$1"; shift
-      if [[ "$ACTION" == "--restore" ]]; then
-        RESTORE_DATE="${1:-}"
-        [[ -n "$RESTORE_DATE" ]] || { echo "Usage: $0 [--backup] | [--restore YYYY-MM-DD]"; exit 1; }
-        shift || true
-      fi
-      ;;
-    *)
-      # 忽略未知参数，避免因调用方额外参数导致失败
-      shift ;;
-  esac
-done
-
 [[ -f "$CONF" ]] && source "$CONF" || { echo "[ERR] config.ini missing: $CONF"; exit 1; }
 
 MODULE="backup_restore"; TODAY="$(date +%F)"
-LOGDIR="${LOG_DIR:-/var/log/shellsys}"; mkdir -p "$LOGDIR" "${BACKUP_DIR:-/opt/backup}"
-LOG_FILE="${LOGDIR}/${MODULE}_${TODAY}.log"
-log(){ printf '%s [%s] %s\n' "$(date '+%F %T')" "$MODULE" "$EXEC_ID" "$*" | tee -a "$LOG_FILE"; }
+LOG_DIR="${LOG_DIR:-/var/log/shellsys}"; mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/${MODULE}_${TODAY}.log"
+log(){ printf '%s [%s] %s %s\n' "$(date '+%F %T')" "$MODULE" "${EXEC_ID:-NA}" "$*" | tee -a "$LOG_FILE"; }
 
-[[ "$(id -u)" -eq 0 ]] || { echo "Permission denied. Run as root."; exit 2; }
+BACKUP_DIR="${BACKUP_DIR:-/opt/backup}"; mkdir -p "$BACKUP_DIR/$TODAY"
 
-backup_files() {
-  local dest="${BACKUP_DIR}/${TODAY}"; mkdir -p "$dest"
-  tar -czf "${dest}/fs.tar.gz" /etc /home /opt 2>/dev/null || true
-  log "File backup finished: ${dest}/fs.tar.gz"
+ACTION="--backup"; RESTORE_DATE=""
+for a in "$@"; do
+  case "$a" in
+    --backup) ACTION="--backup" ;;
+    --restore) ACTION="--restore" ;;
+    --config=*) ;;
+    *) RESTORE_DATE="$a" ;;
+  esac
+done
+
+backup_files(){
+  local dst="$BACKUP_DIR/$TODAY/fs.tar.gz"
+  tar -czf "$dst" /etc/shellsys /opt/shellsys 2>/dev/null && log "File backup finished: $dst"
 }
-backup_db() {
-  if [[ "${DB_BACKUP:-off}" == "on" ]]; then
-    local dest="${BACKUP_DIR}/${TODAY}"; mkdir -p "$dest"
-    mysqldump -uroot -p"${DB_PASS:-}" --all-databases > "${dest}/db.sql"
-    log "Database backup finished: ${dest}/db.sql"
+
+backup_db(){
+  [[ "${DB_BACKUP:-off}" == "on" ]] || { log "DB backup disabled"; return; }
+  local dst="$BACKUP_DIR/$TODAY/db.sql"
+  if command -v mysqldump >/dev/null 2>&1; then
+    mysqldump -uroot -p"${DB_PASS:-}" --all-databases > "$dst" 2>>"$LOG_FILE" && log "Database backup finished: $dst"
   else
-    log "DB backup disabled"
+    log "mysqldump not found, skip DB backup"
   fi
 }
-restore_all() {
-  local src="${BACKUP_DIR}/${1}"
+
+restore_all(){
+  local src="$BACKUP_DIR/${RESTORE_DATE}"
   [[ -d "$src" ]] || { log "Backup set not found: $src"; exit 1; }
-  [[ -f "${src}/fs.tar.gz" ]] && tar -xzf "${src}/fs.tar.gz" -C / && log "FS restored from ${src}/fs.tar.gz"
-  [[ -f "${src}/db.sql"   ]] && mysql -uroot -p"${DB_PASS:-}" < "${src}/db.sql" && log "DB restored from ${src}/db.sql"
+  [[ -f "$src/fs.tar.gz" ]] && tar -xzf "$src/fs.tar.gz" -C / && log "FS restored from $src/fs.tar.gz"
+  if [[ -f "$src/db.sql" ]] && command -v mysql >/dev/null 2>&1; then
+    mysql -uroot -p"${DB_PASS:-}" < "$src/db.sql" && log "DB restored from $src/db.sql"
+  fi
   log "Restore finished: $src"
 }
 
 case "$ACTION" in
-  --backup)  backup_files; backup_db ;;
-  --restore) restore_all "$RESTORE_DATE" ;;
+  --backup) backup_files; backup_db ;;
+  --restore) restore_all ;;
+  *) echo "Usage: $0 [--backup] | [--restore YYYY-MM-DD]"; exit 2 ;;
 esac
-exit 0

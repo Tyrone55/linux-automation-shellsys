@@ -1,103 +1,55 @@
 #!/usr/bin/env bash
-set -e
-cd "$(dirname "$0")/../src"
-sudo mkdir -p /opt/shellsys /etc/shellsys /var/log/shellsys /opt/backup
-sudo cp -r opt/shellsys/* /opt/shellsys/
-sudo cp -r etc/shellsys/* /etc/shellsys/
-sudo chmod +x /opt/shellsys/*.sh
-echo "[+] Installed. Try: sudo /opt/shellsys/main.sh --auto"
-
-# ===============================================
-# ShellSys 系统安装与自动任务配置脚本
-# （含系统时间自动同步 + 定时任务自动安装）
-# ===============================================
-
 set -Eeuo pipefail
 trap 'echo "[FATAL] setup.sh failed at line $LINENO" >&2; exit 4' ERR
 
-echo "[+] Installing ShellSys ..."
+MODE="${1:-demo}"   # demo=每2分钟, normal=每天02:00
+MAIN="/opt/shellsys/main.sh"
+LOG_DIR="/var/log/shellsys"
+CRON_FILE="/etc/cron.d/shellsys"
 
-# === 一、初始化目录结构 ===
-mkdir -p /opt/shellsys /etc/shellsys /var/log/shellsys /opt/backup /root/.cache
+echo "[INFO] 安装 ShellSys（模式：$MODE）..."
+
+# 安装与目录准备（存在则忽略）
+install -d /opt/shellsys /etc/shellsys "$LOG_DIR" /opt/backup /root/.cache
+install -m 755 src/opt/shellsys/*.sh /opt/shellsys/ 2>/dev/null || true
+install -m 644 src/opt/shellsys/config.ini /opt/shellsys/config.ini 2>/dev/null || true
+install -m 644 src/etc/shellsys/*.txt /etc/shellsys/ 2>/dev/null || true
 chmod 700 /root/.cache
-chmod -R 755 /opt/shellsys
-chmod -R 755 /var/log/shellsys
+chmod 755 "$LOG_DIR"
+chmod +x /opt/shellsys/*.sh || true
 
-# === 二、创建默认配置文件 ===
-CONF="/opt/shellsys/config.ini"
-if [[ ! -f "$CONF" ]]; then
-cat > "$CONF" <<'EOF'
-BACKUP_DIR=/opt/backup
-LOG_DIR=/var/log/shellsys
-USER_LIST=/etc/shellsys/user_list.txt
-THRESHOLD_CPU=85
-THRESHOLD_MEM=80
-THRESHOLD_DISK=90
-DB_BACKUP=on
-DB_PASS=admin1
-EOF
-echo "[OK] config.ini created."
-else
-echo "[*] config.ini already exists. Skipped."
-fi
+# 时间同步（chrony）
+if ! rpm -q chrony >/dev/null 2>&1; then dnf install -y chrony; fi
+systemctl enable --now chronyd || true
+timedatectl set-ntp true || true
 
-# === 三、检测并同步系统时间（NTP） ===
-echo "[INFO] 检查系统时间同步状态..."
-if ! rpm -q chrony >/dev/null 2>&1; then
-  echo "[INFO] Installing chrony ..."
-  dnf install -y chrony
-fi
-
-systemctl enable --now chronyd
-
-# 启用 NTP 自动同步
-timedatectl set-ntp true
-
-# 等待同步完成
-sleep 2
-
-if timedatectl status | grep -q "System clock synchronized: yes"; then
-  echo "[OK] 系统时间已同步。"
-else
-  echo "[WARN] 系统时间尚未同步，尝试强制校时..."
-  chronyc makestep || true
-fi
-
-# 打印当前时间
-timedatectl status | grep -E "Time zone|Local time|System clock"
-
-# === 四、安装并启动 crond 服务 ===
-echo "[INFO] 检查 crond 服务..."
-if ! rpm -q cronie >/dev/null 2>&1; then
-  echo "[INFO] Installing cronie ..."
-  dnf install -y cronie cronie-anacron
-fi
+# cron 服务
+if ! rpm -q cronie >/dev/null 2>&1; then dnf install -y cronie cronie-anacron; fi
 systemctl enable --now crond
 
-# === 五、配置 /etc/cron.d 定时任务 ===
-CRON_FILE="/etc/cron.d/shellsys"
-LOG_DIR="/var/log/shellsys"
+# 写入 /etc/cron.d 任务（根据模式）
+case "$MODE" in
+  demo)   SCHEDULE="*/2 * * * *" ;;
+  normal) SCHEDULE="0 2 * * *" ;;
+  *) echo "[ERR] 未知模式：$MODE（仅支持 demo|normal）" >&2; exit 2 ;;
+esac
 
-cat > "$CRON_FILE" <<'EOF'
+cat > "$CRON_FILE" <<EOF
 SHELL=/bin/bash
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LOGNAME=root
-*/2 * * * * root bash -lc '/opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +\%F).log 2>&1 && echo "[Cron executed at $(date +\%F\ %T)]" >> /var/log/shellsys/cron.log'
+$SCHEDULE root /opt/shellsys/main.sh --auto >> $LOG_DIR/cron_wrapper.log 2>&1
 EOF
-
 chmod 644 "$CRON_FILE"
 command -v dos2unix >/dev/null 2>&1 && dos2unix -q "$CRON_FILE" || true
 systemctl reload crond
 
-echo "[OK] Cron job installed: /etc/cron.d/shellsys"
-echo "[INFO] 任务每2分钟触发一次，日志位于 /var/log/shellsys/"
+# 首次手动触发一次，验证日志链路
+if [[ -x "$MAIN" ]]; then
+  "$MAIN" --auto || true
+fi
 
-# === 六、首次手动触发验证 ===
-bash -lc '/opt/shellsys/main.sh --auto >> /var/log/shellsys/main_$(date +%F).log 2>&1 && echo "[Cron executed at $(date "+%F %T")]" >> /var/log/shellsys/cron.log'
-
-echo "[+] Installed. Try: sudo /opt/shellsys/main.sh --auto"
-echo "[+] Cron 已配置完成。查看任务: cat /etc/cron.d/shellsys"
-echo "[+] 查看日志: tail -f /var/log/shellsys/main_$(date +%F).log"
-echo "[+] 或查看触发记录: tail -f /var/log/shellsys/cron.log"
-echo
-echo "[DONE] ShellSys installation completed successfully."
+echo "[OK] 安装完成（模式：$MODE）。"
+echo "[INFO] 计划任务："; cat "$CRON_FILE"
+echo "[INFO] 主控日志：$LOG_DIR/main_$(date +%F).log"
+echo "[INFO] Wrapper日志：$LOG_DIR/cron_wrapper.log"
