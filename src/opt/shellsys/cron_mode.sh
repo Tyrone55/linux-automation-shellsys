@@ -5,20 +5,36 @@ trap 'echo "[FATAL] cron_mode.sh 发生错误（行号 $LINENO）" >&2; exit 4' 
 MODE="${1:-}"
 [[ -z "$MODE" ]] && { echo "用法：cron_mode.sh demo|normal|status|disable"; exit 2; }
 
+if ! command -v crontab >/dev/null 2>&1; then
+  echo "[ERR] 未检测到 crontab 命令，请先安装 cronie/crontab。"
+  exit 3
+fi
+
 LINE_DEMO="*/2 * * * * /bin/bash -lc '/opt/shellsys/main.sh --cron-run >> /var/log/shellsys/main_\\$(date +\\%F).log 2>&1; echo \"[Cron executed at \\$(date +\\%F\\ %T)]\" >> /var/log/shellsys/cron.log'"
 LINE_NORMAL="0 2 * * * /bin/bash -lc '/opt/shellsys/main.sh --cron-run >> /var/log/shellsys/main_\\$(date +\\%F).log 2>&1; echo \"[Cron executed at \\$(date +\\%F\\ %T)]\" >> /var/log/shellsys/cron.log'"
 
 case "$MODE" in
   demo)
-    (crontab -l 2>/dev/null | grep -v '/opt/shellsys/main.sh --cron-run' || true; echo "$LINE_DEMO") | crontab -
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+    crontab -l 2>/dev/null | grep -v '/opt/shellsys/main.sh --cron-run' >"$TMP" || true
+    echo "$LINE_DEMO" >>"$TMP"
+    crontab "$TMP"
     echo "[OK] 已设置为演示模式（每 2 分钟执行一次）。"
     ;;
   normal)
-    (crontab -l 2>/dev/null | grep -v '/opt/shellsys/main.sh --cron-run' || true; echo "$LINE_NORMAL") | crontab -
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+    crontab -l 2>/dev/null | grep -v '/opt/shellsys/main.sh --cron-run' >"$TMP" || true
+    echo "$LINE_NORMAL" >>"$TMP"
+    crontab "$TMP"
     echo "[OK] 已设置为正式模式（每天 02:00 执行）。"
     ;;
   disable)
-    crontab -l 2>/dev/null | grep -v '/opt/shellsys/main.sh --cron-run' | crontab - || true
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+    crontab -l 2>/dev/null | grep -v '/opt/shellsys/main.sh --cron-run' >"$TMP" || true
+    crontab "$TMP" || true
     echo "[OK] 已移除定时任务。"
     ;;
   status)
