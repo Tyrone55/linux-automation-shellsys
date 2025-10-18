@@ -25,7 +25,30 @@ DUMPCLI="$(command -v mysqldump || true)"
 KEYFILE="/etc/shellsys/.db_key"
 
 dec_pass(){ local enc="$1"; [[ -f "$KEYFILE" ]] || { echo ""; return 1; }; printf '%s' "$enc" | openssl enc -aes-256-cbc -a -d -pbkdf2 -pass file:"$KEYFILE" 2>/dev/null || true; }
+db_config_ready(){ [[ "${DB_BACKUP:-off}" == "on" && -n "${DB_NAME:-}" ]]; }
+ensure_db_config(){
+  if db_config_ready; then
+    return
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    slog "数据库备份：检测到尚未配置数据库参数，且当前为非交互执行。"
+    slog "数据库备份：请在交互终端运行 'sudo /opt/shellsys/main.sh --task backup_restore' 以完成首次配置。"
+    exit 3
+  fi
+  [[ -x /opt/shellsys/db_config.sh ]] || { slog "数据库备份：缺少 /opt/shellsys/db_config.sh，无法自动配置。"; exit 3; }
+  slog "数据库备份：检测到尚未配置数据库参数，启动交互式配置向导。"
+  if /opt/shellsys/db_config.sh --config="$CONF"; then
+    source "$CONF" 2>/dev/null || true
+    if db_config_ready; then
+      slog "数据库备份：数据库参数已更新。"
+      return
+    fi
+  fi
+  slog "数据库备份：数据库参数仍未就绪，已终止执行。"
+  exit 3
+}
 
+ensure_db_config
 if [[ "${DB_BACKUP:-off}" != "on" ]]; then slog "数据库备份：DB_BACKUP=${DB_BACKUP:-off}，跳过"; exit 0; fi
 if [[ -z "$DBCLI" || -z "$DUMPCLI" ]]; then slog "数据库备份：未检测到 mysql/mariadb 客户端或 mysqldump，跳过"; exit 0; fi
 if [[ -z "${DB_NAME:-}" ]]; then slog "数据库备份：未在 config.ini 设置 DB_NAME，跳过"; exit 0; fi
