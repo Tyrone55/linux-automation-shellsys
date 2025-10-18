@@ -1,0 +1,6 @@
+动作,用户名,密码,组,是否wheel
+create,test01,Passw0rd!,,wheel
+create,test02,Passw0rd!,devops,
+passwd,test01,NewPass123,, 
+addgroup,test02,,docker,
+delete,olduser,,,

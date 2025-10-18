@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
-# sys_monitor.sh — 采集CPU/MEM/DISK
 set -Eeuo pipefail
-trap 'echo "[FATAL] sys_monitor.sh failed at line $LINENO" >&2; exit 4' ERR
+trap 'echo "[FATAL] sys_monitor.sh 发生错误（行号 $LINENO）" >&2; exit 4' ERR
 
-CONF="/opt/shellsys/config.ini"
-[[ -f "$CONF" ]] && source "$CONF" || { echo "[ERR] config.ini missing: $CONF"; exit 1; }
+CONF="/opt/shellsys/config.ini"; [[ -f "$CONF" ]] && source "$CONF" || { echo "[ERR] 缺少配置文件：$CONF"; exit 1; }
+MODULE="sys_monitor"; TODAY="$(date +%F)"; LOG_DIR="${LOG_DIR:-/var/log/shellsys}"; mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/sys_monitor_$TODAY.log"; SEQ=0
+slog(){ SEQ=$((SEQ+1)); printf '%s [sys_monitor #%03d] ExecID=%s | %s\n' "$(date '+%F %T')" "$SEQ" "${EXEC_ID:-NA}" "$*" | tee -a "$LOG_FILE"; echo >> "$LOG_FILE"; }
 
-MODULE="sys_monitor"; TODAY="$(date +%F)"
-LOG_DIR="${LOG_DIR:-/var/log/shellsys}"; mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/${MODULE}_${TODAY}.log"
-log(){ printf '%s [%s] %s %s\n' "$(date '+%F %T')" "$MODULE" "${EXEC_ID:-NA}" "$*" | tee -a "$LOG_FILE"; }
+slog "开始：系统监控采集"
 
-CPU=$(awk -v p="${THRESHOLD_CPU:-85}" '/cpu /{u=$2+$4; t=$2+$4+$5} END{printf "%.1f", (u/t)*100}' /proc/stat 2>/dev/null || echo 0)
-MEM=$(free -m | awk '/Mem:/{printf "%.1f", ($3/$2)*100}')
-DISK=$(df -P / | awk 'END{gsub("%","",$5); print $5}')
+cpu_usage=$(awk -v FS=" " '/^cpu /{u=$2;n=$3;s=$4;i=$5;w=$6;irq=$7;sirq=$8;sum=u+n+s+i+w+irq+sirq; printf("%.1f", (sum-i)/sum*100)}' /proc/stat 2>/dev/null | head -n1)
+mem_total=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+mem_free=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+mem_used=$((mem_total - mem_free))
+mem_pct=$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN{if(t>0) printf("%.1f", u*100/t); else print "0.0"}')
+disk_pct=$(df -P / | awk 'NR==2{gsub("%","",$5); print $5}')
 
-log "CPU:${CPU}% MEM:${MEM}% DISK:${DISK}%"
+warns=()
+[[ ${cpu_usage%.*} -ge ${THRESHOLD_CPU:-999} ]] && warns+=("CPU≥${THRESHOLD_CPU}%")
+[[ ${mem_pct%.*} -ge ${THRESHOLD_MEM:-999} ]] && warns+=("内存≥${THRESHOLD_MEM}%")
+[[ ${disk_pct%.*} -ge ${THRESHOLD_DISK:-999} ]] && warns+=("磁盘≥${THRESHOLD_DISK}%")
+
+slog "资源占用 | CPU=${cpu_usage:-N/A}% | 内存=${mem_pct}% | 根分区磁盘=${disk_pct}%"
+(( ${#warns[@]} )) && slog "预警：$(IFS='; '; echo "${warns[*]}")"
+slog "完成：系统监控采集"

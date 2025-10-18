@@ -1,0 +1,2 @@
+/opt/shellsys/main.sh
+/etc/shellsys/sudo_policy.conf
